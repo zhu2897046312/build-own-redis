@@ -10,41 +10,42 @@
 #include <thread>
 #include <vector>
 #include <mutex>
+#include <unordered_map>
 
 std::mutex cout_mutex;
+std::mutex store_mutex;
+std::unordered_map<std::string, std::string> key_value_store;
 
 // 解析 RESP 命令
-std::pair<std::string, std::string> parse_command(const char* buffer) {
-    std::string cmd, arg;
+std::vector<std::string> parse_command(const char* buffer) {
+    std::vector<std::string> parts;
     const char* p = buffer;
     
-    // 跳过数组长度 (*2\r\n)
+    // 跳过数组长度 (*n\r\n)
     while (*p && *p != '\n') p++;
     if (*p) p++;
     
-    // 跳过第一个字符串长度 ($4\r\n)
-    while (*p && *p != '\n') p++;
-    if (*p) p++;
-    
-    // 读取命令名
-    while (*p && *p != '\r') {
-        cmd += *p++;
-    }
-    
-    // 如果有参数
-    if (*p) {
-        p += 2; // 跳过 \r\n
-        // 跳过参数长度 ($n\r\n)
-        while (*p && *p != '\n') p++;
-        if (*p) p++;
-        
-        // 读取参数
-        while (*p && *p != '\r') {
-            arg += *p++;
+    while (*p) {
+        // 跳过字符串长度标记 ($n\r\n)
+        if (*p == '$') {
+            while (*p && *p != '\n') p++;
+            if (*p) p++;
+            
+            std::string part;
+            // 读取实际内容直到 \r
+            while (*p && *p != '\r') {
+                part += *p++;
+            }
+            parts.push_back(part);
+            
+            // 跳过 \r\n
+            if (*p) p += 2;
+        } else {
+            break;
         }
     }
     
-    return {cmd, arg};
+    return parts;
 }
 
 void handle_client(int client_fd) {
@@ -61,20 +62,44 @@ void handle_client(int client_fd) {
             break;
         }
 
-        auto [cmd, arg] = parse_command(buffer);
-        
+        auto parts = parse_command(buffer);
+        if (parts.empty()) continue;
+
+        std::string cmd = parts[0];
+        for (char& c : cmd) c = toupper(c);  // 命令转换为大写
+
         if (cmd == "PING") {
             const char* response = "+PONG\r\n";
             send(client_fd, response, strlen(response), 0);
         }
-        else if (cmd == "ECHO") {
-            // ECHO 命令返回批量字符串格式
-            std::string response = "$" + std::to_string(arg.length()) + "\r\n" + arg + "\r\n";
+        else if (cmd == "ECHO" && parts.size() > 1) {
+            std::string response = "$" + std::to_string(parts[1].length()) + "\r\n" + parts[1] + "\r\n";
             send(client_fd, response.c_str(), response.length(), 0);
-            
+        }
+        else if (cmd == "SET" && parts.size() >= 3) {
             {
-                std::lock_guard<std::mutex> lock(cout_mutex);
-                std::cout << "ECHO response: " << response;
+                std::lock_guard<std::mutex> lock(store_mutex);
+                key_value_store[parts[1]] = parts[2];
+            }
+            const char* response = "+OK\r\n";
+            send(client_fd, response, strlen(response), 0);
+        }
+        else if (cmd == "GET" && parts.size() >= 2) {
+            std::string value;
+            {
+                std::lock_guard<std::mutex> lock(store_mutex);
+                auto it = key_value_store.find(parts[1]);
+                if (it != key_value_store.end()) {
+                    value = it->second;
+                }
+            }
+            
+            if (!value.empty()) {
+                std::string response = "$" + std::to_string(value.length()) + "\r\n" + value + "\r\n";
+                send(client_fd, response.c_str(), response.length(), 0);
+            } else {
+                const char* response = "$-1\r\n";  // Redis 用 $-1\r\n 表示 nil
+                send(client_fd, response, strlen(response), 0);
             }
         }
     }
