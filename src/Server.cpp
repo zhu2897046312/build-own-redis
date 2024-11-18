@@ -11,9 +11,42 @@
 #include <vector>
 #include <mutex>
 
-std::mutex cout_mutex; // 用于同步输出
+std::mutex cout_mutex;
 
-// 处理单个客户端连接的函数
+// 解析 RESP 命令
+std::pair<std::string, std::string> parse_command(const char* buffer) {
+    std::string cmd, arg;
+    const char* p = buffer;
+    
+    // 跳过数组长度 (*2\r\n)
+    while (*p && *p != '\n') p++;
+    if (*p) p++;
+    
+    // 跳过第一个字符串长度 ($4\r\n)
+    while (*p && *p != '\n') p++;
+    if (*p) p++;
+    
+    // 读取命令名
+    while (*p && *p != '\r') {
+        cmd += *p++;
+    }
+    
+    // 如果有参数
+    if (*p) {
+        p += 2; // 跳过 \r\n
+        // 跳过参数长度 ($n\r\n)
+        while (*p && *p != '\n') p++;
+        if (*p) p++;
+        
+        // 读取参数
+        while (*p && *p != '\r') {
+            arg += *p++;
+        }
+    }
+    
+    return {cmd, arg};
+}
+
 void handle_client(int client_fd) {
     {
         std::lock_guard<std::mutex> lock(cout_mutex);
@@ -28,14 +61,20 @@ void handle_client(int client_fd) {
             break;
         }
 
-        // 检查是否是 PING 命令
-        if (strstr(buffer, "PING") != nullptr) {
+        auto [cmd, arg] = parse_command(buffer);
+        
+        if (cmd == "PING") {
             const char* response = "+PONG\r\n";
             send(client_fd, response, strlen(response), 0);
+        }
+        else if (cmd == "ECHO") {
+            // ECHO 命令返回批量字符串格式
+            std::string response = "$" + std::to_string(arg.length()) + "\r\n" + arg + "\r\n";
+            send(client_fd, response.c_str(), response.length(), 0);
             
             {
                 std::lock_guard<std::mutex> lock(cout_mutex);
-                std::cout << "Sent PONG to client " << client_fd << std::endl;
+                std::cout << "ECHO response: " << response;
             }
         }
     }
@@ -94,9 +133,7 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        // 为每个新客户端创建一个新线程
         client_threads.emplace_back(handle_client, client_fd);
-        // 分离线程，让它独立运行
         client_threads.back().detach();
     }
     
