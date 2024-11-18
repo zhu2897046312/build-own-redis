@@ -11,10 +11,29 @@
 #include <vector>
 #include <mutex>
 #include <unordered_map>
+#include <chrono>
 
 std::mutex cout_mutex;
 std::mutex store_mutex;
-std::unordered_map<std::string, std::string> key_value_store;
+
+// 存储键值对和过期时间
+struct ValueWithExpiry {
+    std::string value;
+    std::chrono::steady_clock::time_point expiry;
+    bool has_expiry;
+
+    ValueWithExpiry(const std::string& v) 
+        : value(v), has_expiry(false) {}
+    
+    ValueWithExpiry(const std::string& v, std::chrono::steady_clock::time_point exp) 
+        : value(v), expiry(exp), has_expiry(true) {}
+    
+    bool is_expired() const {
+        return has_expiry && std::chrono::steady_clock::now() > expiry;
+    }
+};
+
+std::unordered_map<std::string, ValueWithExpiry> key_value_store;
 
 // 解析 RESP 命令
 std::vector<std::string> parse_command(const char* buffer) {
@@ -66,7 +85,7 @@ void handle_client(int client_fd) {
         if (parts.empty()) continue;
 
         std::string cmd = parts[0];
-        for (char& c : cmd) c = toupper(c);  // 命令转换为大写
+        for (char& c : cmd) c = toupper(c);
 
         if (cmd == "PING") {
             const char* response = "+PONG\r\n";
@@ -77,28 +96,61 @@ void handle_client(int client_fd) {
             send(client_fd, response.c_str(), response.length(), 0);
         }
         else if (cmd == "SET" && parts.size() >= 3) {
+            std::string key = parts[1];
+            std::string value = parts[2];
+            
+            // 检查是否有 PX 参数
+            bool has_px = false;
+            long long px_value = 0;
+            if (parts.size() >= 5) {
+                std::string option = parts[3];
+                for (char& c : option) c = toupper(c);
+                if (option == "PX" && parts.size() >= 5) {
+                    try {
+                        px_value = std::stoll(parts[4]);
+                        has_px = true;
+                    } catch (...) {
+                        // 忽略无效的 PX 值
+                    }
+                }
+            }
+
             {
                 std::lock_guard<std::mutex> lock(store_mutex);
-                key_value_store[parts[1]] = parts[2];
+                if (has_px) {
+                    auto expiry = std::chrono::steady_clock::now() + 
+                                std::chrono::milliseconds(px_value);
+                    key_value_store[key] = ValueWithExpiry(value, expiry);
+                } else {
+                    key_value_store[key] = ValueWithExpiry(value);
+                }
             }
+            
             const char* response = "+OK\r\n";
             send(client_fd, response, strlen(response), 0);
         }
         else if (cmd == "GET" && parts.size() >= 2) {
             std::string value;
+            bool key_exists = false;
             {
                 std::lock_guard<std::mutex> lock(store_mutex);
                 auto it = key_value_store.find(parts[1]);
                 if (it != key_value_store.end()) {
-                    value = it->second;
+                    if (!it->second.is_expired()) {
+                        value = it->second.value;
+                        key_exists = true;
+                    } else {
+                        // 删除过期的键
+                        key_value_store.erase(it);
+                    }
                 }
             }
             
-            if (!value.empty()) {
+            if (key_exists) {
                 std::string response = "$" + std::to_string(value.length()) + "\r\n" + value + "\r\n";
                 send(client_fd, response.c_str(), response.length(), 0);
             } else {
-                const char* response = "$-1\r\n";  // Redis 用 $-1\r\n 表示 nil
+                const char* response = "$-1\r\n";
                 send(client_fd, response, strlen(response), 0);
             }
         }
