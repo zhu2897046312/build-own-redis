@@ -98,6 +98,12 @@ public:
                 continue;
             }
 
+            if (type == 0xFA) { // 辅助字段
+                std::string aux_key = read_length_string(file);
+                std::string aux_value = read_length_string(file);
+                continue;
+            }
+
             if (type == 0xFB) { // RESIZEDB
                 skip_length_encoded_string(file); // 跳过 db_size
                 skip_length_encoded_string(file); // 跳过 expires_size
@@ -112,15 +118,10 @@ public:
             }
 
             // 读取值
-            if (type == 0) { // 字符串类型
-                std::string value = read_length_string(file);
-                if (!value.empty()) {
-                    std::cout << "Loaded key: " << key << ", value: " << value << std::endl;
-                    key_value_store[key] = ValueWithExpiry(value);
-                }
-            } else {
-                std::cerr << "Unsupported value type: " << (int)type << std::endl;
-                break;
+            std::string value = read_length_string(file);
+            if (!value.empty()) {
+                std::cout << "Loaded key: " << key << ", value: " << value << std::endl;
+                key_value_store[key] = ValueWithExpiry(value);
             }
         }
 
@@ -203,6 +204,28 @@ std::string handle_config_get(const std::string& param) {
     else {
         // 如果参数不存在，返回空数组
         response = "*0\r\n";
+    }
+    return response;
+}
+
+// 处理 KEYS 命令
+std::string handle_keys_command(const std::string& pattern) {
+    std::vector<std::string> keys;
+    {
+        std::lock_guard<std::mutex> lock(store_mutex);
+        for (const auto& pair : key_value_store) {
+            if (!pair.second.is_expired()) {
+                if (pattern == "*") {
+                    keys.push_back(pair.first);
+                }
+            }
+        }
+    }
+
+    // 构建 RESP 数组响应
+    std::string response = "*" + std::to_string(keys.size()) + "\r\n";
+    for (const auto& key : keys) {
+        response += "$" + std::to_string(key.length()) + "\r\n" + key + "\r\n";
     }
     return response;
 }
@@ -299,6 +322,10 @@ void handle_client(int client_fd) {
                 send(client_fd, response, strlen(response), 0);
                 std::cout << "Key not found: " << parts[1] << std::endl;
             }
+        }
+        else if (cmd == "KEYS" && parts.size() >= 2) {
+            std::string response = handle_keys_command(parts[1]);
+            send(client_fd, response.c_str(), response.length(), 0);
         }
     }
 
