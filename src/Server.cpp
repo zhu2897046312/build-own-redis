@@ -22,6 +22,8 @@ struct ValueWithExpiry {
     std::chrono::steady_clock::time_point expiry;
     bool has_expiry;
 
+    ValueWithExpiry() : value(""), has_expiry(false) {}
+    
     ValueWithExpiry(const std::string& v) 
         : value(v), has_expiry(false) {}
     
