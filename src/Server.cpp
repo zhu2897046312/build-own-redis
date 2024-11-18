@@ -118,10 +118,15 @@ public:
             }
 
             // 读取值
-            std::string value = read_length_string(file);
-            if (!value.empty()) {
-                std::cout << "Loaded key: " << key << ", value: " << value << std::endl;
-                key_value_store[key] = ValueWithExpiry(value);
+            if (type == 0) { // 字符串类型
+                std::string value = read_length_string(file);
+                if (!value.empty()) {
+                    std::cout << "Loaded key: " << key << ", value: " << value << std::endl;
+                    key_value_store[key] = ValueWithExpiry(value);
+                }
+            } else {
+                std::cerr << "Unsupported value type: " << (int)type << std::endl;
+                continue;
             }
         }
 
@@ -133,24 +138,36 @@ private:
         uint8_t byte;
         file.read(reinterpret_cast<char*>(&byte), 1);
         
-        if ((byte & 0xC0) == 0) {
-            file.seekg(byte, std::ios::cur);
+        if ((byte & 0xC0) == 0) { // 6 位长度
+            file.seekg(byte & 0x3F, std::ios::cur);
         }
-        // 其他编码类型暂时忽略
+        else if ((byte & 0xC0) == 0x40) { // 14 位长度
+            uint8_t next_byte;
+            file.read(reinterpret_cast<char*>(&next_byte), 1);
+            uint16_t length = ((byte & 0x3F) << 8) | next_byte;
+            file.seekg(length, std::ios::cur);
+        }
     }
 
     static std::string read_length_string(std::ifstream& file) {
         uint8_t byte;
         file.read(reinterpret_cast<char*>(&byte), 1);
         
-        if ((byte & 0xC0) == 0) { // 长度编码在第一个字节
+        if ((byte & 0xC0) == 0) { // 6 位长度
             uint32_t length = byte & 0x3F;
             std::string result(length, '\0');
             file.read(&result[0], length);
             return result;
         }
+        else if ((byte & 0xC0) == 0x40) { // 14 位长度
+            uint8_t next_byte;
+            file.read(reinterpret_cast<char*>(&next_byte), 1);
+            uint16_t length = ((byte & 0x3F) << 8) | next_byte;
+            std::string result(length, '\0');
+            file.read(&result[0], length);
+            return result;
+        }
         
-        // 暂时不处理其他编码方式
         std::cerr << "Unsupported string encoding: " << (int)byte << std::endl;
         return "";
     }
