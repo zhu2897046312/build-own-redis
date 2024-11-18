@@ -8,6 +8,15 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
+void handle_redis_command(int client_fd, const char* buffer, ssize_t bytes_read) {
+  // 检查是否是 PING 命令
+  if (strstr(buffer, "PING") != nullptr) {
+    const char* response = "+PONG\r\n";
+    send(client_fd, response, strlen(response), 0);
+    std::cout << "Sent: +PONG\\r\\n" << std::endl;
+  }
+}
+
 int main(int argc, char **argv) {
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
@@ -54,8 +63,14 @@ int main(int argc, char **argv) {
         
         std::cout << "Client connected\n";
         
-        const char* response = "+PONG\r\n";
-        send(client_fd, response, strlen(response), 0);
+        while (true) {
+          char buffer[1024] = {0};
+          ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
+          if (bytes_read <= 0) {
+            break;
+          }
+          handle_redis_command(client_fd, buffer, bytes_read);
+        }
         
         close(client_fd);
     }
