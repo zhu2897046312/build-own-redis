@@ -25,6 +25,19 @@ struct RedisConfig {
         dir = "/tmp/redis-data";  // 默认目录
         dbfilename = "dump.rdb";  // 默认文件名
     }
+
+    // 从命令行参数解析配置
+    void parse_args(int argc, char** argv) {
+        for (int i = 1; i < argc; i++) {
+            std::string arg = argv[i];
+            if (arg == "--dir" && i + 1 < argc) {
+                dir = argv[++i];
+            }
+            else if (arg == "--dbfilename" && i + 1 < argc) {
+                dbfilename = argv[++i];
+            }
+        }
+    }
 };
 
 RedisConfig config;
@@ -211,6 +224,9 @@ void handle_client(int client_fd) {
 int main(int argc, char **argv) {
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
+    
+    // 解析命令行参数
+    config.parse_args(argc, argv);
     
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
