@@ -66,6 +66,7 @@ public:
     static bool read_rdb_file(const std::string& path) {
         std::ifstream file(path, std::ios::binary);
         if (!file.is_open()) {
+            std::cerr << "Failed to open RDB file: " << path << std::endl;
             return false;
         }
 
@@ -73,52 +74,84 @@ public:
         char magic[5];
         file.read(magic, 5);
         if (std::string(magic, 5) != "REDIS") {
+            std::cerr << "Invalid RDB file format" << std::endl;
             return false;
         }
 
-        // 跳过版本号（4字节）
-        file.seekg(4, std::ios::cur);
+        // 读取版本号（4字节）
+        char version[4];
+        file.read(version, 4);
 
         // 读取键值对
         while (!file.eof()) {
             uint8_t type;
             file.read(reinterpret_cast<char*>(&type), 1);
+            if (file.eof()) break;
 
             if (type == 0xFF) { // EOF
                 break;
             }
 
             if (type == 0xFE) { // 选择数据库
+                uint8_t dbnum;
+                file.read(reinterpret_cast<char*>(&dbnum), 1);
+                continue;
+            }
+
+            if (type == 0xFB) { // RESIZEDB
+                skip_length_encoded_string(file); // 跳过 db_size
+                skip_length_encoded_string(file); // 跳过 expires_size
                 continue;
             }
 
             // 读取键
             std::string key = read_length_string(file);
-            if (key.empty()) continue;
+            if (key.empty()) {
+                std::cerr << "Failed to read key" << std::endl;
+                continue;
+            }
 
             // 读取值
-            std::string value = read_length_string(file);
-            if (value.empty()) continue;
-
-            // 存储键值对
-            key_value_store[key] = ValueWithExpiry(value);
+            if (type == 0) { // 字符串类型
+                std::string value = read_length_string(file);
+                if (!value.empty()) {
+                    std::cout << "Loaded key: " << key << ", value: " << value << std::endl;
+                    key_value_store[key] = ValueWithExpiry(value);
+                }
+            } else {
+                std::cerr << "Unsupported value type: " << (int)type << std::endl;
+                break;
+            }
         }
 
         return true;
     }
 
 private:
-    static std::string read_length_string(std::ifstream& file) {
-        uint8_t length;
-        file.read(reinterpret_cast<char*>(&length), 1);
+    static void skip_length_encoded_string(std::ifstream& file) {
+        uint8_t byte;
+        file.read(reinterpret_cast<char*>(&byte), 1);
         
-        if ((length & 0xC0) == 0) { // 长度编码在第一个字节
+        if ((byte & 0xC0) == 0) {
+            file.seekg(byte, std::ios::cur);
+        }
+        // 其他编码类型暂时忽略
+    }
+
+    static std::string read_length_string(std::ifstream& file) {
+        uint8_t byte;
+        file.read(reinterpret_cast<char*>(&byte), 1);
+        
+        if ((byte & 0xC0) == 0) { // 长度编码在第一个字节
+            uint32_t length = byte & 0x3F;
             std::string result(length, '\0');
             file.read(&result[0], length);
             return result;
         }
         
-        return ""; // 暂时不处理其他编码方式
+        // 暂时不处理其他编码方式
+        std::cerr << "Unsupported string encoding: " << (int)byte << std::endl;
+        return "";
     }
 };
 
@@ -260,9 +293,11 @@ void handle_client(int client_fd) {
             if (key_exists) {
                 std::string response = "$" + std::to_string(value.length()) + "\r\n" + value + "\r\n";
                 send(client_fd, response.c_str(), response.length(), 0);
+                std::cout << "Sent response for key " << parts[1] << ": " << response;
             } else {
                 const char* response = "$-1\r\n";
                 send(client_fd, response, strlen(response), 0);
+                std::cout << "Key not found: " << parts[1] << std::endl;
             }
         }
     }
