@@ -16,6 +16,19 @@
 std::mutex cout_mutex;
 std::mutex store_mutex;
 
+// Redis 配置
+struct RedisConfig {
+    std::string dir;
+    std::string dbfilename;
+
+    RedisConfig() {
+        dir = "/tmp/redis-data";  // 默认目录
+        dbfilename = "dump.rdb";  // 默认文件名
+    }
+};
+
+RedisConfig config;
+
 // 存储键值对和过期时间
 struct ValueWithExpiry {
     std::string value;
@@ -69,6 +82,26 @@ std::vector<std::string> parse_command(const char* buffer) {
     return parts;
 }
 
+// 处理 CONFIG GET 命令
+std::string handle_config_get(const std::string& param) {
+    std::string response;
+    if (param == "dir") {
+        response = "*2\r\n$3\r\ndir\r\n$" + 
+                  std::to_string(config.dir.length()) + "\r\n" + 
+                  config.dir + "\r\n";
+    }
+    else if (param == "dbfilename") {
+        response = "*2\r\n$9\r\ndbfilename\r\n$" + 
+                  std::to_string(config.dbfilename.length()) + "\r\n" + 
+                  config.dbfilename + "\r\n";
+    }
+    else {
+        // 如果参数不存在，返回空数组
+        response = "*0\r\n";
+    }
+    return response;
+}
+
 void handle_client(int client_fd) {
     {
         std::lock_guard<std::mutex> lock(cout_mutex);
@@ -92,6 +125,15 @@ void handle_client(int client_fd) {
         if (cmd == "PING") {
             const char* response = "+PONG\r\n";
             send(client_fd, response, strlen(response), 0);
+        }
+        else if (cmd == "CONFIG" && parts.size() >= 3) {
+            std::string subcmd = parts[1];
+            for (char& c : subcmd) c = toupper(c);
+            
+            if (subcmd == "GET" && parts.size() >= 3) {
+                std::string response = handle_config_get(parts[2]);
+                send(client_fd, response.c_str(), response.length(), 0);
+            }
         }
         else if (cmd == "ECHO" && parts.size() > 1) {
             std::string response = "$" + std::to_string(parts[1].length()) + "\r\n" + parts[1] + "\r\n";
