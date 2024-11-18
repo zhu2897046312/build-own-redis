@@ -12,6 +12,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <chrono>
+#include <fstream>
 
 std::mutex cout_mutex;
 std::mutex store_mutex;
@@ -22,11 +23,10 @@ struct RedisConfig {
     std::string dbfilename;
 
     RedisConfig() {
-        dir = "/tmp/redis-data";  // 默认目录
-        dbfilename = "dump.rdb";  // 默认文件名
+        dir = "/tmp/redis-data";
+        dbfilename = "dump.rdb";
     }
 
-    // 从命令行参数解析配置
     void parse_args(int argc, char** argv) {
         for (int i = 1; i < argc; i++) {
             std::string arg = argv[i];
@@ -49,10 +49,7 @@ struct ValueWithExpiry {
     bool has_expiry;
 
     ValueWithExpiry() : value(""), has_expiry(false) {}
-    
-    ValueWithExpiry(const std::string& v) 
-        : value(v), has_expiry(false) {}
-    
+    ValueWithExpiry(const std::string& v) : value(v), has_expiry(false) {}
     ValueWithExpiry(const std::string& v, std::chrono::steady_clock::time_point exp) 
         : value(v), expiry(exp), has_expiry(true) {}
     
@@ -62,6 +59,68 @@ struct ValueWithExpiry {
 };
 
 std::unordered_map<std::string, ValueWithExpiry> key_value_store;
+
+// RDB 文件读取类
+class RDBReader {
+public:
+    static bool read_rdb_file(const std::string& path) {
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open()) {
+            return false;
+        }
+
+        // 读取 REDIS 魔数
+        char magic[5];
+        file.read(magic, 5);
+        if (std::string(magic, 5) != "REDIS") {
+            return false;
+        }
+
+        // 跳过版本号（4字节）
+        file.seekg(4, std::ios::cur);
+
+        // 读取键值对
+        while (!file.eof()) {
+            uint8_t type;
+            file.read(reinterpret_cast<char*>(&type), 1);
+
+            if (type == 0xFF) { // EOF
+                break;
+            }
+
+            if (type == 0xFE) { // 选择数据库
+                continue;
+            }
+
+            // 读取键
+            std::string key = read_length_string(file);
+            if (key.empty()) continue;
+
+            // 读取值
+            std::string value = read_length_string(file);
+            if (value.empty()) continue;
+
+            // 存储键值对
+            key_value_store[key] = ValueWithExpiry(value);
+        }
+
+        return true;
+    }
+
+private:
+    static std::string read_length_string(std::ifstream& file) {
+        uint8_t length;
+        file.read(reinterpret_cast<char*>(&length), 1);
+        
+        if ((length & 0xC0) == 0) { // 长度编码在第一个字节
+            std::string result(length, '\0');
+            file.read(&result[0], length);
+            return result;
+        }
+        
+        return ""; // 暂时不处理其他编码方式
+    }
+};
 
 // 解析 RESP 命令
 std::vector<std::string> parse_command(const char* buffer) {
@@ -192,14 +251,9 @@ void handle_client(int client_fd) {
             {
                 std::lock_guard<std::mutex> lock(store_mutex);
                 auto it = key_value_store.find(parts[1]);
-                if (it != key_value_store.end()) {
-                    if (!it->second.is_expired()) {
-                        value = it->second.value;
-                        key_exists = true;
-                    } else {
-                        // 删除过期的键
-                        key_value_store.erase(it);
-                    }
+                if (it != key_value_store.end() && !it->second.is_expired()) {
+                    value = it->second.value;
+                    key_exists = true;
                 }
             }
             
@@ -225,8 +279,13 @@ int main(int argc, char **argv) {
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
     
-    // 解析命令行参数
     config.parse_args(argc, argv);
+    
+    // 尝试加载 RDB 文件
+    std::string rdb_path = config.dir + "/" + config.dbfilename;
+    if (RDBReader::read_rdb_file(rdb_path)) {
+        std::cout << "Successfully loaded RDB file: " << rdb_path << std::endl;
+    }
     
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
