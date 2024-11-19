@@ -205,54 +205,7 @@ std::vector<std::string> parse_command(const char* buffer) {
     return parts;
 }
 
-// 处理 CONFIG GET 命令
-std::string handle_config_get(const std::string& param) {
-    std::string response;
-    if (param == "dir") {
-        response = "*2\r\n$3\r\ndir\r\n$" + 
-                  std::to_string(config.dir.length()) + "\r\n" + 
-                  config.dir + "\r\n";
-    }
-    else if (param == "dbfilename") {
-        response = "*2\r\n$9\r\ndbfilename\r\n$" + 
-                  std::to_string(config.dbfilename.length()) + "\r\n" + 
-                  config.dbfilename + "\r\n";
-    }
-    else {
-        // 如果参数不存在，返回空数组
-        response = "*0\r\n";
-    }
-    return response;
-}
-
-// 处理 KEYS 命令
-std::string handle_keys_command(const std::string& pattern) {
-    std::vector<std::string> keys;
-    {
-        std::lock_guard<std::mutex> lock(store_mutex);
-        for (const auto& pair : key_value_store) {
-            if (!pair.second.is_expired()) {
-                if (pattern == "*") {
-                    keys.push_back(pair.first);
-                }
-            }
-        }
-    }
-
-    // 构建 RESP 数组响应
-    std::string response = "*" + std::to_string(keys.size()) + "\r\n";
-    for (const auto& key : keys) {
-        response += "$" + std::to_string(key.length()) + "\r\n" + key + "\r\n";
-    }
-    return response;
-}
-
 void handle_client(int client_fd) {
-    {
-        std::lock_guard<std::mutex> lock(cout_mutex);
-        std::cout << "New client thread started for client " << client_fd << std::endl;
-    }
-
     while (true) {
         char buffer[1024] = {0};
         ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
@@ -267,58 +220,7 @@ void handle_client(int client_fd) {
         std::string cmd = parts[0];
         for (char& c : cmd) c = toupper(c);
 
-        if (cmd == "PING") {
-            const char* response = "+PONG\r\n";
-            send(client_fd, response, strlen(response), 0);
-        }
-        else if (cmd == "CONFIG" && parts.size() >= 3) {
-            std::string subcmd = parts[1];
-            for (char& c : subcmd) c = toupper(c);
-            
-            if (subcmd == "GET" && parts.size() >= 3) {
-                std::string response = handle_config_get(parts[2]);
-                send(client_fd, response.c_str(), response.length(), 0);
-            }
-        }
-        else if (cmd == "ECHO" && parts.size() > 1) {
-            std::string response = "$" + std::to_string(parts[1].length()) + "\r\n" + parts[1] + "\r\n";
-            send(client_fd, response.c_str(), response.length(), 0);
-        }
-        else if (cmd == "SET" && parts.size() >= 3) {
-            std::string key = parts[1];
-            std::string value = parts[2];
-            
-            // 检查是否有 PX 参数
-            bool has_px = false;
-            long long px_value = 0;
-            if (parts.size() >= 5) {
-                std::string option = parts[3];
-                for (char& c : option) c = toupper(c);
-                if (option == "PX" && parts.size() >= 5) {
-                    try {
-                        px_value = std::stoll(parts[4]);
-                        has_px = true;
-                    } catch (...) {
-                        // 忽略无效的 PX 值
-                    }
-                }
-            }
-
-            {
-                std::lock_guard<std::mutex> lock(store_mutex);
-                if (has_px) {
-                    auto expiry = std::chrono::steady_clock::now() + 
-                                std::chrono::milliseconds(px_value);
-                    key_value_store[key] = ValueWithExpiry(value, expiry);
-                } else {
-                    key_value_store[key] = ValueWithExpiry(value);
-                }
-            }
-            
-            const char* response = "+OK\r\n";
-            send(client_fd, response, strlen(response), 0);
-        }
-        else if (cmd == "GET" && parts.size() >= 2) {
+        if (cmd == "GET" && parts.size() >= 2) {
             std::string value;
             bool key_exists = false;
             {
@@ -333,25 +235,14 @@ void handle_client(int client_fd) {
             if (key_exists) {
                 std::string response = "$" + std::to_string(value.length()) + "\r\n" + value + "\r\n";
                 send(client_fd, response.c_str(), response.length(), 0);
-                std::cout << "Sent response for key " << parts[1] << ": " << response;
             } else {
                 const char* response = "$-1\r\n";
                 send(client_fd, response, strlen(response), 0);
-                std::cout << "Key not found: " << parts[1] << std::endl;
             }
-        }
-        else if (cmd == "KEYS" && parts.size() >= 2) {
-            std::string response = handle_keys_command(parts[1]);
-            send(client_fd, response.c_str(), response.length(), 0);
         }
     }
 
     close(client_fd);
-    
-    {
-        std::lock_guard<std::mutex> lock(cout_mutex);
-        std::cout << "Client " << client_fd << " disconnected" << std::endl;
-    }
 }
 
 int main(int argc, char **argv) {
@@ -396,8 +287,6 @@ int main(int argc, char **argv) {
     
     std::cout << "Server listening on port 6379...\n";
     
-    std::vector<std::thread> client_threads;
-
     while (true) {
         struct sockaddr_in client_addr;
         int client_addr_len = sizeof(client_addr);
@@ -408,8 +297,7 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        client_threads.emplace_back(handle_client, client_fd);
-        client_threads.back().detach();
+        std::thread(handle_client, client_fd).detach();
     }
     
     close(server_fd);
