@@ -117,21 +117,27 @@ public:
                 uint64_t expire_time;
                 file.read(reinterpret_cast<char*>(&expire_time), 8);
 
-                // 获取当前时间
+                // 获取当前时间戳（毫秒）
                 auto now = std::chrono::system_clock::now();
                 auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     now.time_since_epoch()
                 ).count();
 
                 // 计算过期时间（毫秒）
+                // 0xFC: 秒级时间戳
+                // 0xFD: 毫秒级时间戳
                 uint64_t expire_ms = (type == 0xFC) ? expire_time * 1000 : expire_time;
 
-                // 设置过期时间
-                if (expire_ms > now_ms) {
-                    auto duration = std::chrono::milliseconds(expire_ms - now_ms);
-                    expiry = std::chrono::steady_clock::now() + duration;
-                    has_expiry = true;
-                }
+                // 设置过期时间点
+                auto duration = std::chrono::milliseconds(expire_ms);
+                auto expire_point = std::chrono::system_clock::time_point(duration);
+                auto steady_now = std::chrono::steady_clock::now();
+                auto system_now = std::chrono::system_clock::now();
+                
+                // 计算时间差并设置稳定时钟的过期时间点
+                auto time_diff = expire_point - system_now;
+                expiry = steady_now + time_diff;
+                has_expiry = true;
 
                 // 读取实际的值类型
                 file.read(reinterpret_cast<char*>(&type), 1);
@@ -312,19 +318,20 @@ void handle_client(int client_fd) {
                 std::lock_guard<std::mutex> lock(store_mutex);
                 auto it = key_value_store.find(parts[1]);
                 if (it != key_value_store.end()) {
-                    if (!it->second.is_expired()) {
+                    if (!it->second.is_expired()) {  // 检查是否过期
                         value = it->second.value;
                         key_exists = true;
+                    } else {
+                        // 如果已过期，从存储中删除
+                        key_value_store.erase(it);
                     }
                 }
             }
             
             if (key_exists) {
-                // 返回批量字符串
                 std::string response = "$" + std::to_string(value.length()) + "\r\n" + value + "\r\n";
                 send(client_fd, response.c_str(), response.length(), 0);
             } else {
-                // 返回 null 批量字符串
                 const char* response = "$-1\r\n";
                 send(client_fd, response, strlen(response), 0);
             }
