@@ -118,46 +118,54 @@ public:
                 uint64_t expire_time;
                 file.read(reinterpret_cast<char*>(&expire_time), 8);
 
-                // 获取当前时间
-                auto now = std::chrono::system_clock::now();
-                auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now.time_since_epoch()
-                ).count();
-
-                // 将过期时间转换为毫秒
-                uint64_t expire_ms;
-                if (type == 0xFC) { // 秒级时间戳
-                    expire_ms = expire_time * 1000;
-                } else { // 毫秒级时间戳
-                    expire_ms = expire_time;
-                }
-
-                // 如果过期时间大于当前时间，设置过期时间
-                if (expire_ms > now_ms) {
-                    auto duration = std::chrono::milliseconds(expire_ms - now_ms);
-                    expiry = std::chrono::steady_clock::now() + duration;
-                    has_expiry = true;
-                }
-
                 // 读取实际的值类型
                 file.read(reinterpret_cast<char*>(&type), 1);
-            }
 
-            // 读取键
-            std::string key = read_length_string(file);
-            if (key.empty()) continue;
+                // 读取键
+                std::string key = read_length_string(file);
+                if (key.empty()) continue;
 
-            // 读取值
-            if (type == 0) {
-                std::string value = read_length_string(file);
-                if (!value.empty()) {
-                    if (has_expiry) {
-                        key_value_store[key] = ValueWithExpiry(value, expiry);
-                    } else {
-                        key_value_store[key] = ValueWithExpiry(value);
+                // 读取值
+                if (type == 0) {
+                    std::string value = read_length_string(file);
+                    if (!value.empty()) {
+                        // 获取当前时间戳
+                        auto now = std::chrono::system_clock::now();
+                        auto now_sec = std::chrono::duration_cast<std::chrono::seconds>(
+                            now.time_since_epoch()
+                        ).count();
+
+                        // 计算过期时间
+                        if (type == 0xFC) { // 秒级时间戳
+                            if (expire_time > now_sec) {
+                                auto duration = std::chrono::seconds(expire_time - now_sec);
+                                auto expiry = std::chrono::steady_clock::now() + duration;
+                                key_value_store[key] = ValueWithExpiry(value, expiry);
+                            }
+                        } else { // 毫秒级时间戳
+                            auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                now.time_since_epoch()
+                            ).count();
+                            if (expire_time > now_ms) {
+                                auto duration = std::chrono::milliseconds(expire_time - now_ms);
+                                auto expiry = std::chrono::steady_clock::now() + duration;
+                                key_value_store[key] = ValueWithExpiry(value, expiry);
+                            }
+                        }
+                        std::cout << "Loaded key: " << key << ", value: " << value << std::endl;
                     }
-                    std::cout << "Loaded key: " << key << ", value: " << value 
-                              << (has_expiry ? " (with expiry)" : "") << std::endl;
+                }
+            } else {
+                // 没有过期时间的键值对
+                std::string key = read_length_string(file);
+                if (key.empty()) continue;
+
+                if (type == 0) {
+                    std::string value = read_length_string(file);
+                    if (!value.empty()) {
+                        key_value_store[key] = ValueWithExpiry(value);
+                        std::cout << "Loaded key: " << key << ", value: " << value << std::endl;
+                    }
                 }
             }
         }
