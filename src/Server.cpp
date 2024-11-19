@@ -315,22 +315,20 @@ void handle_client(int client_fd) {
             {
                 std::lock_guard<std::mutex> lock(store_mutex);
                 auto it = key_value_store.find(parts[1]);
-                if (it != key_value_store.end()) {
-                    if (!it->second.is_expired()) {
-                        value = it->second.value;
-                        key_exists = true;
-                    }
+                if (it != key_value_store.end() && !it->second.is_expired()) {
+                    value = it->second.value;
+                    key_exists = true;
                 }
             }
             
             if (key_exists) {
-                // 返回批量字符串格式
+                // 键存在且未过期，返回批量字符串
                 std::string response = "$" + std::to_string(value.length()) + "\r\n" + value + "\r\n";
                 send(client_fd, response.c_str(), response.length(), 0);
             } else {
-                // 返回空字符串而不是 null
-                std::string response = "$" + std::to_string(value.length()) + "\r\n" + value + "\r\n";
-                send(client_fd, response.c_str(), response.length(), 0);
+                // 键不存在或已过期，返回 null 批量字符串
+                const char* response = "$-1\r\n";
+                send(client_fd, response, strlen(response), 0);
             }
         }
         else if (cmd == "KEYS" && parts.size() >= 2) {
