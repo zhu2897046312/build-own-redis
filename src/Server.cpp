@@ -263,7 +263,16 @@ void handle_client(int client_fd) {
         std::string cmd = parts[0];
         for (char& c : cmd) c = toupper(c);
 
-        if (cmd == "CONFIG" && parts.size() >= 3) {
+        if (cmd == "PING") {
+            const char* response = "+PONG\r\n";
+            send(client_fd, response, strlen(response), 0);
+        }
+        else if (cmd == "ECHO" && parts.size() > 1) {
+            // 处理 ECHO 命令
+            std::string response = "$" + std::to_string(parts[1].length()) + "\r\n" + parts[1] + "\r\n";
+            send(client_fd, response.c_str(), response.length(), 0);
+        }
+        else if (cmd == "CONFIG" && parts.size() >= 3) {
             std::string subcmd = parts[1];
             for (char& c : subcmd) c = toupper(c);
             
