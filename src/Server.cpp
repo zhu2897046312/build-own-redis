@@ -101,6 +101,14 @@ public:
             if (type == 0xFA) { // 辅助字段
                 std::string aux_key = read_length_string(file);
                 std::string aux_value = read_length_string(file);
+                if (aux_key == "redis-ver") {
+                    // 处理版本信息
+                    continue;
+                }
+                if (aux_key == "redis-bits") {
+                    // 处理位信息
+                    continue;
+                }
                 continue;
             }
 
@@ -113,20 +121,14 @@ public:
             // 读取键
             std::string key = read_length_string(file);
             if (key.empty()) {
-                std::cerr << "Failed to read key" << std::endl;
                 continue;
             }
 
             // 读取值
-            if (type == 0) { // 字符串类型
-                std::string value = read_length_string(file);
-                if (!value.empty()) {
-                    std::cout << "Loaded key: " << key << ", value: " << value << std::endl;
-                    key_value_store[key] = ValueWithExpiry(value);
-                }
-            } else {
-                std::cerr << "Unsupported value type: " << (int)type << std::endl;
-                continue;
+            std::string value = read_length_string(file);
+            if (!value.empty()) {
+                std::cout << "Loaded key: " << key << ", value: " << value << std::endl;
+                key_value_store[key] = ValueWithExpiry(value);
             }
         }
 
@@ -168,8 +170,7 @@ private:
             return result;
         }
         
-        std::cerr << "Unsupported string encoding: " << (int)byte << std::endl;
-        return "";
+        return "";  // 不打印错误信息，直接返回空字符串
     }
 };
 
