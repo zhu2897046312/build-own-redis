@@ -271,7 +271,7 @@ std::string handle_config_get(const std::string& param) {
     }
     else {
         // 如果参数不存在，返回空数组
-        response = "*0\r\n";
+        response = "$-1\r\n";
     }
     return response;
 }
