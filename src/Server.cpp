@@ -99,16 +99,8 @@ public:
             }
 
             if (type == 0xFA) { // 辅助字段
-                std::string aux_key = read_length_string(file);
-                std::string aux_value = read_length_string(file);
-                if (aux_key == "redis-ver") {
-                    // 处理版本信息
-                    continue;
-                }
-                if (aux_key == "redis-bits") {
-                    // 处理位信息
-                    continue;
-                }
+                skip_length_encoded_string(file); // 跳过 key
+                skip_length_encoded_string(file); // 跳过 value
                 continue;
             }
 
@@ -124,11 +116,13 @@ public:
                 continue;
             }
 
-            // 读取值
-            std::string value = read_length_string(file);
-            if (!value.empty()) {
-                std::cout << "Loaded key: " << key << ", value: " << value << std::endl;
-                key_value_store[key] = ValueWithExpiry(value);
+            // 读取值（type == 0 表示字符串类型）
+            if (type == 0) {
+                std::string value = read_length_string(file);
+                if (!value.empty()) {
+                    std::cout << "Loaded key: " << key << ", value: " << value << std::endl;
+                    key_value_store[key] = ValueWithExpiry(value);
+                }
             }
         }
 
@@ -170,7 +164,7 @@ private:
             return result;
         }
         
-        return "";  // 不打印错误信息，直接返回空字符串
+        return "";
     }
 };
 
