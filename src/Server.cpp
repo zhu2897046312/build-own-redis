@@ -131,28 +131,18 @@ public:
                     if (!value.empty()) {
                         // 获取当前时间戳
                         auto now = std::chrono::system_clock::now();
-                        auto now_sec = std::chrono::duration_cast<std::chrono::seconds>(
+                        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             now.time_since_epoch()
                         ).count();
 
-                        // 计算过期时间
-                        if (type == 0xFC) { // 秒级时间戳
-                            if (expire_time > now_sec) {
-                                auto duration = std::chrono::seconds(expire_time - now_sec);
-                                auto expiry = std::chrono::steady_clock::now() + duration;
-                                key_value_store[key] = ValueWithExpiry(value, expiry);
-                            }
-                        } else { // 毫秒级时间戳
-                            auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                now.time_since_epoch()
-                            ).count();
-                            if (expire_time > now_ms) {
-                                auto duration = std::chrono::milliseconds(expire_time - now_ms);
-                                auto expiry = std::chrono::steady_clock::now() + duration;
-                                key_value_store[key] = ValueWithExpiry(value, expiry);
-                            }
-                        }
-                        std::cout << "Loaded key: " << key << ", value: " << value << std::endl;
+                        // 将过期时间转换为毫秒
+                        uint64_t expire_ms = (type == 0xFC) ? expire_time * 1000 : expire_time;
+
+                        // 存储键值对，设置过期时间
+                        auto duration = std::chrono::milliseconds(expire_ms - now_ms);
+                        auto expiry = std::chrono::steady_clock::now() + duration;
+                        key_value_store[key] = ValueWithExpiry(value, expiry);
+                        std::cout << "Loaded key with expiry: " << key << ", value: " << value << std::endl;
                     }
                 }
             } else {
@@ -325,18 +315,22 @@ void handle_client(int client_fd) {
             {
                 std::lock_guard<std::mutex> lock(store_mutex);
                 auto it = key_value_store.find(parts[1]);
-                if (it != key_value_store.end() && !it->second.is_expired()) {
-                    value = it->second.value;
-                    key_exists = true;
+                if (it != key_value_store.end()) {
+                    if (!it->second.is_expired()) {
+                        value = it->second.value;
+                        key_exists = true;
+                    }
                 }
             }
             
             if (key_exists) {
+                // 返回批量字符串格式
                 std::string response = "$" + std::to_string(value.length()) + "\r\n" + value + "\r\n";
                 send(client_fd, response.c_str(), response.length(), 0);
             } else {
-                const char* response = "$-1\r\n";
-                send(client_fd, response, strlen(response), 0);
+                // 返回空字符串而不是 null
+                std::string response = "$" + std::to_string(value.length()) + "\r\n" + value + "\r\n";
+                send(client_fd, response.c_str(), response.length(), 0);
             }
         }
         else if (cmd == "KEYS" && parts.size() >= 2) {
