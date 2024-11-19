@@ -295,6 +295,40 @@ void handle_client(int client_fd) {
             std::string response = handle_keys_command(parts[1]);
             send(client_fd, response.c_str(), response.length(), 0);
         }
+        else if (cmd == "SET" && parts.size() >= 3) {
+            std::string key = parts[1];
+            std::string value = parts[2];
+            
+            // 检查是否有 PX 参数
+            bool has_px = false;
+            long long px_value = 0;
+            if (parts.size() >= 5) {
+                std::string option = parts[3];
+                for (char& c : option) c = toupper(c);
+                if (option == "PX" && parts.size() >= 5) {
+                    try {
+                        px_value = std::stoll(parts[4]);
+                        has_px = true;
+                    } catch (...) {
+                        // 忽略无效的 PX 值
+                    }
+                }
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(store_mutex);
+                if (has_px) {
+                    auto expiry = std::chrono::steady_clock::now() + 
+                                std::chrono::milliseconds(px_value);
+                    key_value_store[key] = ValueWithExpiry(value, expiry);
+                } else {
+                    key_value_store[key] = ValueWithExpiry(value);
+                }
+            }
+            
+            const char* response = "+OK\r\n";
+            send(client_fd, response, strlen(response), 0);
+        }
     }
 
     close(client_fd);
