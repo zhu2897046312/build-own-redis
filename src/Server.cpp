@@ -227,6 +227,26 @@ std::string handle_keys_command(const std::string& pattern) {
     return response;
 }
 
+// 处理 CONFIG GET 命令
+std::string handle_config_get(const std::string& param) {
+    std::string response;
+    if (param == "dir") {
+        response = "*2\r\n$3\r\ndir\r\n$" + 
+                  std::to_string(config.dir.length()) + "\r\n" + 
+                  config.dir + "\r\n";
+    }
+    else if (param == "dbfilename") {
+        response = "*2\r\n$9\r\ndbfilename\r\n$" + 
+                  std::to_string(config.dbfilename.length()) + "\r\n" + 
+                  config.dbfilename + "\r\n";
+    }
+    else {
+        // 如果参数不存在，返回空数组
+        response = "*0\r\n";
+    }
+    return response;
+}
+
 void handle_client(int client_fd) {
     while (true) {
         char buffer[1024] = {0};
@@ -242,7 +262,16 @@ void handle_client(int client_fd) {
         std::string cmd = parts[0];
         for (char& c : cmd) c = toupper(c);
 
-        if (cmd == "GET" && parts.size() >= 2) {
+        if (cmd == "CONFIG" && parts.size() >= 3) {
+            std::string subcmd = parts[1];
+            for (char& c : subcmd) c = toupper(c);
+            
+            if (subcmd == "GET" && parts.size() >= 3) {
+                std::string response = handle_config_get(parts[2]);
+                send(client_fd, response.c_str(), response.length(), 0);
+            }
+        }
+        else if (cmd == "GET" && parts.size() >= 2) {
             std::string value;
             bool key_exists = false;
             {
