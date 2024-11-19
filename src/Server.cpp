@@ -110,52 +110,48 @@ public:
                 continue;
             }
 
-            // 处理过期时间
-            std::chrono::steady_clock::time_point expiry;
             bool has_expiry = false;
+            std::chrono::steady_clock::time_point expiry;
 
-            if (type == 0xFC || type == 0xFD) { // 过期时间（秒或毫秒）
+            if (type == 0xFC || type == 0xFD) { // 过期时间
                 uint64_t expire_time;
                 file.read(reinterpret_cast<char*>(&expire_time), 8);
 
+                // 获取当前时间
+                auto now = std::chrono::system_clock::now();
+                auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now.time_since_epoch()
+                ).count();
+
+                // 计算过期时间（毫秒）
+                uint64_t expire_ms = (type == 0xFC) ? expire_time * 1000 : expire_time;
+
+                // 设置过期时间
+                if (expire_ms > now_ms) {
+                    auto duration = std::chrono::milliseconds(expire_ms - now_ms);
+                    expiry = std::chrono::steady_clock::now() + duration;
+                    has_expiry = true;
+                }
+
                 // 读取实际的值类型
                 file.read(reinterpret_cast<char*>(&type), 1);
+            }
 
-                // 读取键
-                std::string key = read_length_string(file);
-                if (key.empty()) continue;
+            // 读取键
+            std::string key = read_length_string(file);
+            if (key.empty()) continue;
 
-                // 读取值
-                if (type == 0) {
-                    std::string value = read_length_string(file);
-                    if (!value.empty()) {
-                        // 获取当前时间戳
-                        auto now = std::chrono::system_clock::now();
-                        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            now.time_since_epoch()
-                        ).count();
-
-                        // 将过期时间转换为毫秒
-                        uint64_t expire_ms = (type == 0xFC) ? expire_time * 1000 : expire_time;
-
-                        // 存储键值对，设置过期时间
-                        auto duration = std::chrono::milliseconds(expire_ms - now_ms);
-                        auto expiry = std::chrono::steady_clock::now() + duration;
+            // 读取值
+            if (type == 0) {
+                std::string value = read_length_string(file);
+                if (!value.empty()) {
+                    if (has_expiry) {
                         key_value_store[key] = ValueWithExpiry(value, expiry);
-                        std::cout << "Loaded key with expiry: " << key << ", value: " << value << std::endl;
-                    }
-                }
-            } else {
-                // 没有过期时间的键值对
-                std::string key = read_length_string(file);
-                if (key.empty()) continue;
-
-                if (type == 0) {
-                    std::string value = read_length_string(file);
-                    if (!value.empty()) {
+                    } else {
                         key_value_store[key] = ValueWithExpiry(value);
-                        std::cout << "Loaded key: " << key << ", value: " << value << std::endl;
                     }
+                    std::cout << "Loaded key: " << key << ", value: " << value 
+                              << (has_expiry ? " (with expiry)" : "") << std::endl;
                 }
             }
         }
@@ -315,18 +311,20 @@ void handle_client(int client_fd) {
             {
                 std::lock_guard<std::mutex> lock(store_mutex);
                 auto it = key_value_store.find(parts[1]);
-                if (it != key_value_store.end() && !it->second.is_expired()) {
-                    value = it->second.value;
-                    key_exists = true;
+                if (it != key_value_store.end()) {
+                    if (!it->second.is_expired()) {
+                        value = it->second.value;
+                        key_exists = true;
+                    }
                 }
             }
             
             if (key_exists) {
-                // 键存在且未过期，返回批量字符串
+                // 返回批量字符串
                 std::string response = "$" + std::to_string(value.length()) + "\r\n" + value + "\r\n";
                 send(client_fd, response.c_str(), response.length(), 0);
             } else {
-                // 键不存在或已过期，返回 null 批量字符串
+                // 返回 null 批量字符串
                 const char* response = "$-1\r\n";
                 send(client_fd, response, strlen(response), 0);
             }
