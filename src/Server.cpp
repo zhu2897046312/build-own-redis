@@ -205,6 +205,28 @@ std::vector<std::string> parse_command(const char* buffer) {
     return parts;
 }
 
+// 处理 KEYS 命令
+std::string handle_keys_command(const std::string& pattern) {
+    std::vector<std::string> keys;
+    {
+        std::lock_guard<std::mutex> lock(store_mutex);
+        for (const auto& pair : key_value_store) {
+            if (!pair.second.is_expired()) {
+                if (pattern == "*") {
+                    keys.push_back(pair.first);
+                }
+            }
+        }
+    }
+
+    // 构建 RESP 数组响应
+    std::string response = "*" + std::to_string(keys.size()) + "\r\n";
+    for (const auto& key : keys) {
+        response += "$" + std::to_string(key.length()) + "\r\n" + key + "\r\n";
+    }
+    return response;
+}
+
 void handle_client(int client_fd) {
     while (true) {
         char buffer[1024] = {0};
@@ -239,6 +261,10 @@ void handle_client(int client_fd) {
                 const char* response = "$-1\r\n";
                 send(client_fd, response, strlen(response), 0);
             }
+        }
+        else if (cmd == "KEYS" && parts.size() >= 2) {
+            std::string response = handle_keys_command(parts[1]);
+            send(client_fd, response.c_str(), response.length(), 0);
         }
     }
 
